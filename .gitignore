@@ -1,0 +1,37 @@
+# CMake build artifacts
+/build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+cmake-build-*/
+compile_commands.json
+
+# Experiments outputs
+experiments/bin/
+experiments/**/*.o
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editor folders
+.vscode/
+.idea/
+
+# Object files
+*.o
+*.ko
+*.dSYM
+
+# Libraries
+*.lib
+*.a
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+*.framework
+*.xcframework

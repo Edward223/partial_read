@@ -11,7 +11,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # 导出 compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# 单配置生成器（如 Ninja、Unix Makefiles）
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+
 # 添加子目录
-add_subdirectory(exam_utils)
+add_subdirectory(experiments)
 
 set(ZSTD_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libpr/libzstd.a")
