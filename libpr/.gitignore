@@ -2,3 +2,6 @@
 libzstd.pc
 libzstd-nomt
 obj/*
+*.a
+*.so
+*.so.*

@@ -18,6 +18,7 @@ experiments/**/*.o
 # Editor folders
 .vscode/
 .idea/
+.cache/
 
 # Object files
 *.o
