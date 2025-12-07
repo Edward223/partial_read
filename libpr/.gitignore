@@ -5,3 +5,6 @@ obj/*
 *.a
 *.so
 *.so.*
+*.o
+*.ko
+*.dSYM

@@ -17,7 +17,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 
+set(ZSTD_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libpr/libzstd.a")
+
 # 添加子目录
 add_subdirectory(experiments)
 
-set(ZSTD_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libpr/libzstd.a")
