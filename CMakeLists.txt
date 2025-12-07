@@ -19,6 +19,15 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 set(ZSTD_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libpr/libzstd.a")
 
+# third-party configuration (header-only to reduce build time)
+set(FMT_HEADER_ONLY ON CACHE BOOL "" FORCE)
+set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
+
+set(SPDLOG_HEADER_ONLY ON CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+
 # 添加子目录
+add_subdirectory(third_party/fmt)
+add_subdirectory(third_party/spdlog)
 add_subdirectory(experiments)
 

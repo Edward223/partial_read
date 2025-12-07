@@ -35,7 +35,7 @@ BUILD_TYPE=${BUILD_TYPE:-Debug}
 
 if (( BUILD_LIB )); then
     echo "[build] ensuring libpr artifacts are up to date"
-    make -C "${ROOT_DIR}/libpr" lib
+    make -C "${ROOT_DIR}/libpr" lib -j"$(nproc)"
 fi
 
 if (( BUILD_EXP )); then

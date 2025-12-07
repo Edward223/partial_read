@@ -4,4 +4,4 @@
 #include "common/common.h"
 #include "zstd.h"
 
-int test_compress() {}
+void test_compress() {}

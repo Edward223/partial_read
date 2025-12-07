@@ -1,0 +1,4 @@
+-std=gnu++20
+-msse2
+-I/home/tjy/reps/partial_read/libpr
+-I/home/tjy/reps/partial_read/experiments
