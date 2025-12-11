@@ -8,3 +8,6 @@ obj/*
 *.o
 *.ko
 *.dSYM
+
+libzstd.a
+libzstd.so.1.5.8

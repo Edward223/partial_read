@@ -20,9 +20,12 @@ inline const std::filesystem::path kCompressedDataDir =
 inline const std::filesystem::path kOutputDir =
     kProjectRoot / ".." / ".." / "data" / "output";
 
-struct PrParams {
+struct TestParams {
   std::size_t compress_block_size{1 * MB};
-  int compression_level{ZSTD_CLEVEL_DEFAULT};
+  std::size_t inner_block_size{64 * KB};
+  bool use_partial_read{false};
+  bool save_compressed_chunks{false};
+  int compression_level{19};
 };
 
 } // namespace pr

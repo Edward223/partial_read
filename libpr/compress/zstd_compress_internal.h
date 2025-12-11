@@ -19,6 +19,7 @@
  *  Dependencies
  ***************************************/
 #include "../common/zstd_internal.h"
+#include "zstd.h"
 #include "zstd_cwksp.h"
 #ifdef ZSTD_MULTITHREAD
 #include "zstdmt_compress.h"
@@ -1784,6 +1785,10 @@ size_t ZSTD_compressContinue_public(ZSTD_CCtx *cctx, void *dst,
 
 size_t ZSTD_compressEnd_public(ZSTD_CCtx *cctx, void *dst, size_t dstCapacity,
                                const void *src, size_t srcSize);
+
+size_t PR_compressEnd_public(ZSTD_CCtx *cctx, void *dst, size_t dstCapacity,
+                             const void *src, size_t srcSize,
+                             PR_Param *prParams);
 
 size_t ZSTD_compressBlock_deprecated(ZSTD_CCtx *cctx, void *dst,
                                      size_t dstCapacity, const void *src,

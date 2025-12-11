@@ -174,6 +174,11 @@ ZSTDLIB_API const char *ZSTD_versionString(void);
 ZSTDLIB_API size_t ZSTD_compress(void *dst, size_t dstCapacity, const void *src,
                                  size_t srcSize, int compressionLevel);
 
+typedef struct PR_Params_s PR_Param;
+ZSTDLIB_API size_t PR_compress(void *dst, size_t dstCapacity, const void *src,
+                               size_t srcSize, int compressionLevel,
+                               PR_Param *prPrarams);
+
 /*! ZSTD_decompress() :
  * `compressedSize` : must be the _exact_ size of some number of compressed
  * and/or skippable frames. Multiple compressed frames can be decompressed at
@@ -317,7 +322,6 @@ ZSTDLIB_API ZSTD_CCtx *ZSTD_createCCtx(void);
 ZSTDLIB_API size_t
 ZSTD_freeCCtx(ZSTD_CCtx *cctx); /* compatible with NULL pointer */
 
-typedef struct PR_Params_s PR_Param;
 ZSTDLIB_API PR_Param *PR_createParams(size_t compress_block_size,
                                       size_t inner_block_size,
                                       void *index_buffer);
@@ -334,6 +338,11 @@ ZSTDLIB_API void PR_freeParams(PR_Param *params);
 ZSTDLIB_API size_t ZSTD_compressCCtx(ZSTD_CCtx *cctx, void *dst,
                                      size_t dstCapacity, const void *src,
                                      size_t srcSize, int compressionLevel);
+
+ZSTDLIB_API size_t PR_compressCCtx(ZSTD_CCtx *cctx, void *dst,
+                                   size_t dstCapacity, const void *src,
+                                   size_t srcSize, int compressionLevel,
+                                   PR_Param *prParams);
 
 /*= Decompression context
  *  When decompressing many times,
