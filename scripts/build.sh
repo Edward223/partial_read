@@ -3,21 +3,24 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 [-p|-e|-a]"
+    echo "Usage: $0 [-p|-e|-a] [-D <debuglevel>]"
     echo "  -p  build libpr only"
     echo "  -e  build experiments only"
     echo "  -a  build both libpr and experiments"
+    echo "  -D  set DEBUGLEVEL for libpr Makefile (default: 0)"
     exit 1
 }
 
 BUILD_LIB=0
 BUILD_EXP=0
+DEBUGLEVEL=${DEBUGLEVEL:-0}
 
-while getopts "pae" opt; do
+while getopts "paeD:" opt; do
     case "${opt}" in
         p) BUILD_LIB=1 ;;
         e) BUILD_EXP=1 ;;
         a) BUILD_LIB=1; BUILD_EXP=1 ;;
+        D) DEBUGLEVEL=${OPTARG} ;;
         *) usage ;;
     esac
 done
@@ -35,7 +38,7 @@ BUILD_TYPE=${BUILD_TYPE:-Debug}
 
 if (( BUILD_LIB )); then
     echo "[build] ensuring libpr artifacts are up to date"
-    make -C "${ROOT_DIR}/libpr" lib -j"$(nproc)"
+    make -C "${ROOT_DIR}/libpr" lib DEBUGLEVEL="${DEBUGLEVEL}" -j"$(nproc)"
 fi
 
 if (( BUILD_EXP )); then

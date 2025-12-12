@@ -19,15 +19,16 @@ int main() {
   }
 
   const pr::TestParams params{
-      .compress_block_size = 1 * pr::MB,
-      .inner_block_size = 64 * pr::KB,
-      .use_partial_read = false, // TODO: implement partial read path
+      .compress_block_size = 64 * pr::KB,
+      .inner_block_size = 16 * pr::KB,
+      .use_partial_read = true, // TODO: implement partial read path
       .save_compressed_chunks = true,
       .compression_level = ZSTD_CLEVEL_DEFAULT,
   };
 
   std::vector<char> src_buffer(params.compress_block_size);
-  std::vector<char> dst_buffer(ZSTD_compressBound(params.compress_block_size));
+  std::vector<char> dst_buffer(ZSTD_compressBound(params.compress_block_size) +
+                               pr::kIndexSizeBound);
 
   const fs::path output_root = pr::kOutputDir / "silesia_chunks";
   std::error_code output_ec;
@@ -49,6 +50,9 @@ int main() {
                                  dst_buffer)) {
       ++processed_files;
     }
+    // For test
+    if (processed_files >= 1)
+      break;
   }
 
   spdlog::info("Completed processing {} files from {}", processed_files,

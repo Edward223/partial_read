@@ -1,11 +1,14 @@
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <vector>
 
+#include "common/common.h"
 #include "fmt/format.h"
 #include "spdlog/spdlog.h"
 #include "utils/utils.h"
+#include "zstd.h"
 
 namespace pr {
 
@@ -146,6 +149,10 @@ bool CompressFileInChunks(const std::filesystem::path &input_path,
         ratio);
 
     ++chunk_index;
+    // For Test
+    if (chunk_index >= 1) {
+      break;
+    }
   }
 
   if (chunk_index == 0) {
@@ -162,20 +169,61 @@ bool CompressSingleChunk(const char *src, std::size_t src_size,
                          const TestParams &params,
                          std::vector<char> &dst_buffer,
                          std::size_t &compressed_size) {
-  if (params.use_partial_read) {
-    spdlog::warn("use_partial_read=true is TODO; using full block for now");
-    // TODO: implement partial read path using params.inner_block_size
-  }
-
-  const std::size_t required_capacity = ZSTD_compressBound(src_size);
+  const std::size_t required_capacity =
+      ZSTD_compressBound(src_size) +
+      (params.use_partial_read ? kIndexSizeBound : 0);
   if (dst_buffer.size() < required_capacity) {
     dst_buffer.resize(required_capacity);
   }
 
-  compressed_size = ZSTD_compress(dst_buffer.data(), dst_buffer.size(), src,
-                                  src_size, params.compression_level);
+  if (params.use_partial_read) {
+    spdlog::warn("use_partial_read=true is TODO; using full block for now");
+    // TODO: implement partial read path using params.inner_block_size
+    char *index_buffer = dst_buffer.data();
+    PR_Param *pr_params =
+        PR_createParams(src_size, params.inner_block_size, index_buffer);
+    char *cdata_dst = dst_buffer.data() + kIndexSizeBound;
+    compressed_size =
+        PR_compress(cdata_dst, dst_buffer.size() - kIndexSizeBound, src,
+                    src_size, params.compression_level, pr_params);
+    PR_freeParams(pr_params);
+    if (ZSTD_isError(compressed_size)) {
+      spdlog::error("{}_compress failed for chunk: {}",
+                    params.use_partial_read ? "PR" : "ZSTD",
+                    ZSTD_getErrorName(compressed_size));
+      return false;
+    }
+
+    // Verify PR_compress result: decompress cdata and compare.
+
+    std::vector<char> verify_buffer(src_size);
+    const size_t decompressed_size = ZSTD_decompress(
+        verify_buffer.data(), verify_buffer.size(), cdata_dst, compressed_size);
+    if (ZSTD_isError(decompressed_size)) {
+      spdlog::error("PR decompress check failed for chunk: {}",
+                    ZSTD_getErrorName(decompressed_size));
+      return false;
+    }
+    if (decompressed_size != src_size) {
+      spdlog::error("PR decompress size mismatch (got {}, expect {}) while "
+                    "verifying chunk",
+                    decompressed_size, src_size);
+      return false;
+    }
+    if (std::memcmp(verify_buffer.data(), src, src_size) != 0) {
+      spdlog::error("PR decompress data mismatch while verifying chunk");
+      return false;
+    }
+
+  } else {
+
+    compressed_size = ZSTD_compress(dst_buffer.data(), dst_buffer.size(), src,
+                                    src_size, params.compression_level);
+  }
+
   if (ZSTD_isError(compressed_size)) {
-    spdlog::error("ZSTD_compress failed for chunk: {}",
+    spdlog::error("{}_compress failed for chunk: {}",
+                  params.use_partial_read ? "PR" : "ZSTD",
                   ZSTD_getErrorName(compressed_size));
     return false;
   }

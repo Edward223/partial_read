@@ -20,6 +20,8 @@ inline const std::filesystem::path kCompressedDataDir =
 inline const std::filesystem::path kOutputDir =
     kProjectRoot / ".." / ".." / "data" / "output";
 
+inline constexpr size_t kIndexSizeBound = 8 * 32;
+
 struct TestParams {
   std::size_t compress_block_size{1 * MB};
   std::size_t inner_block_size{64 * KB};

@@ -6096,8 +6096,8 @@ size_t PR_compress(void *dst, size_t dstCapacity, const void *src,
 
   ZSTD_CCtx ctxBody;
   ZSTD_initCCtx(&ctxBody, ZSTD_defaultCMem);
-  result = ZSTD_compressCCtx(&ctxBody, dst, dstCapacity, src, srcSize,
-                             compressionLevel);
+  result = PR_compressCCtx(&ctxBody, dst, dstCapacity, src, srcSize,
+                           compressionLevel, prPrarams);
   ZSTD_freeCCtxContent(&ctxBody); /* can't free ctxBody itself, as it's on
                                      stack; free only heap content */
 
