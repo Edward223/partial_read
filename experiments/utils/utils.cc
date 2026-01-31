@@ -150,7 +150,7 @@ bool CompressFileInChunks(const std::filesystem::path &input_path,
 
     ++chunk_index;
     // For Test
-    if (chunk_index >= 1) {
+    if (chunk_index >= 3) {
       break;
     }
   }

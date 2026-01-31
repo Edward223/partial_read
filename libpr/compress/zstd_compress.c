@@ -16,7 +16,7 @@
 #include "../common/mem.h"
 #include "../common/zstd_deps.h" /* INT_MAX, ZSTD_memset, ZSTD_memcpy */
 #include "hist.h"                /* HIST_countFast_wksp */
-#include "zstd.h"
+
 
 #define FSE_STATIC_LINKING_ONLY /* FSE_encodeSymbol */
 #include "../common/bits.h"     /* ZSTD_highbit32, ZSTD_rotateRight_U64 */
@@ -124,10 +124,11 @@ ZSTDLIB_API PR_Param *PR_createParams(size_t compress_block_size,
     params->compress_block_size = compress_block_size;
     params->inner_block_size = inner_block_size;
     params->index_buffer = index_buffer;
+    params->use_global_entropy = true;
     return params;
   }
 }
-
+ 
 static void ZSTD_initCCtx(ZSTD_CCtx *cctx, ZSTD_customMem memManager) {
   assert(cctx != NULL);
   ZSTD_memset(cctx, 0, sizeof(*cctx));
@@ -4452,6 +4453,41 @@ static void ZSTD_deriveBlockSplitsHelper(seqStoreSplits *splits,
   }
 }
 
+static void PR_deriveBlockSplitsHelper(seqStoreSplits *splits,
+                                         size_t startIdx, size_t endIdx,
+                                         ZSTD_CCtx *zc,
+                                         const SeqStore_t *origSeqStore,PR_Param *prParams) {
+
+  DEBUGLOG(5, "PR_deriveBlockSplitsHelper: startIdx=%zu endIdx=%zu", startIdx,
+           endIdx);
+  // size_t literalsBytes = 0;
+  // size_t matchBytes = 0;
+  size_t const nbSeqs =
+      (size_t)(origSeqStore->sequences - origSeqStore->sequencesStart);
+  size_t i;
+  size_t currInnerBlockSize=0;
+  for (i = 0; i < nbSeqs; ++i) {
+    SeqDef seq = origSeqStore->sequencesStart[i];
+    size_t matchBytes = seq.mlBase + MINMATCH;
+    size_t literalsBytes = seq.litLength;
+    if (i == origSeqStore->longLengthPos &&
+        origSeqStore->longLengthType == ZSTD_llt_matchLength) {
+      matchBytes += 0x10000;
+    }
+    if (i == origSeqStore->longLengthPos &&
+        origSeqStore->longLengthType == ZSTD_llt_literalLength) {
+      literalsBytes += 0x10000;
+    }
+    currInnerBlockSize+=matchBytes+literalsBytes;
+    if(currInnerBlockSize>=prParams->inner_block_size){
+        DEBUGLOG(5, "PR split decided at seqIndex,[...,seqIndex):%zu", i);
+        splits->splitLocations[splits->idx] = (U32)i;
+        splits->idx++;
+        currInnerBlockSize=0;
+    }
+  }
+}
+
 /* Base recursive function.
  * Populates a table with intra-block partition indices that can improve
  * compression ratio.
@@ -4471,6 +4507,24 @@ static size_t ZSTD_deriveBlockSplits(ZSTD_CCtx *zc, U32 partitions[],
     return 0;
   }
   ZSTD_deriveBlockSplitsHelper(&splits, 0, nbSeq, zc, &zc->seqStore);
+  splits.splitLocations[splits.idx] = nbSeq;
+  DEBUGLOG(5, "ZSTD_deriveBlockSplits: final nb partitions: %zu",
+           splits.idx + 1);
+  return splits.idx;
+}
+
+static size_t PR_deriveBlockSplits(ZSTD_CCtx *zc, U32 partitions[],
+                                     U32 nbSeq,PR_Param *prParams) {
+  seqStoreSplits splits;
+  splits.splitLocations = partitions;
+  splits.idx = 0;
+  if (nbSeq <= 4) {
+    DEBUGLOG(5, "ZSTD_deriveBlockSplits: Too few sequences to split (%u <= 4)",
+             nbSeq);
+    /* Refuse to try and split anything with less than 4 sequences */
+    return 0;
+  }
+  PR_deriveBlockSplitsHelper(&splits, 0, nbSeq, zc, &zc->seqStore,prParams);
   splits.splitLocations[splits.idx] = nbSeq;
   DEBUGLOG(5, "ZSTD_deriveBlockSplits: final nb partitions: %zu",
            splits.idx + 1);
@@ -4585,6 +4639,107 @@ static size_t ZSTD_compressBlock_splitBlock_internal(ZSTD_CCtx *zc, void *dst,
   return cSize;
 }
 
+static size_t PR_compressBlock_splitBlock_internal(ZSTD_CCtx *zc, void *dst,
+                                                     size_t dstCapacity,
+                                                     const void *src,
+                                                     size_t blockSize,
+                                                     U32 lastBlock, U32 nbSeq,PR_Param *prParams) {
+  size_t cSize = 0;
+  const BYTE *ip = (const BYTE *)src;
+  BYTE *op = (BYTE *)dst;
+  size_t i = 0;
+  size_t srcBytesTotal = 0;
+  U32 *const partitions =
+      zc->blockSplitCtx.partitions; /* size == ZSTD_MAX_NB_BLOCK_SPLITS */
+  SeqStore_t *const nextSeqStore = &zc->blockSplitCtx.nextSeqStore;
+  SeqStore_t *const currSeqStore = &zc->blockSplitCtx.currSeqStore;
+  size_t const numSplits = PR_deriveBlockSplits(zc, partitions, nbSeq,prParams);
+
+  /* If a block is split and some partitions are emitted as RLE/uncompressed,
+   * then repcode history may become invalid. In order to reconcile potentially
+   * invalid repcodes, we keep track of two separate repcode histories that
+   * simulate repcode history on compression and decompression side, and use the
+   * histories to determine whether we must replace a particular repcode with
+   * its raw offset.
+   *
+   * 1) cRep gets updated for each partition, regardless of whether the block
+   * was emitted as uncompressed or RLE. This allows us to retrieve the offset
+   * value that an invalid repcode references within a nocompress/RLE block. 2)
+   * dRep gets updated only for compressed partitions, and when a repcode gets
+   * replaced, will use the replacement offset value rather than the original
+   * repcode to update the repcode history. dRep also will be the final repcode
+   * history sent to the next block.
+   *
+   * See ZSTD_seqStore_resolveOffCodes() for more details.
+   */
+  Repcodes_t dRep;
+  Repcodes_t cRep;
+  ZSTD_memcpy(dRep.rep, zc->blockState.prevCBlock->rep, sizeof(Repcodes_t));
+  ZSTD_memcpy(cRep.rep, zc->blockState.prevCBlock->rep, sizeof(Repcodes_t));
+  ZSTD_memset(nextSeqStore, 0, sizeof(SeqStore_t));
+
+  DEBUGLOG(5,
+           "ZSTD_compressBlock_splitBlock_internal (dstCapacity=%u, "
+           "dictLimit=%u, nextToUpdate=%u)",
+           (unsigned)dstCapacity,
+           (unsigned)zc->blockState.matchState.window.dictLimit,
+           (unsigned)zc->blockState.matchState.nextToUpdate);
+
+  if (numSplits == 0) {
+    size_t cSizeSingleBlock = ZSTD_compressSeqStore_singleBlock(
+        zc, &zc->seqStore, &dRep, &cRep, op, dstCapacity, ip, blockSize,
+        lastBlock, 0 /* isPartition */);
+    FORWARD_IF_ERROR(
+        cSizeSingleBlock,
+        "Compressing single block from splitBlock_internal() failed!");
+    DEBUGLOG(5, "ZSTD_compressBlock_splitBlock_internal: No splits");
+    assert(zc->blockSizeMax <= ZSTD_BLOCKSIZE_MAX);
+    assert(cSizeSingleBlock <= zc->blockSizeMax + ZSTD_blockHeaderSize);
+    return cSizeSingleBlock;
+  }
+
+  ZSTD_deriveSeqStoreChunk(currSeqStore, &zc->seqStore, 0, partitions[0]);
+  for (i = 0; i <= numSplits; ++i) {
+    size_t cSizeChunk;
+    U32 const lastPartition = (i == numSplits);
+    U32 lastBlockEntireSrc = 0;
+
+    size_t srcBytes = ZSTD_countSeqStoreLiteralsBytes(currSeqStore) +
+                      ZSTD_countSeqStoreMatchBytes(currSeqStore);
+    srcBytesTotal += srcBytes;
+    if (lastPartition) {
+      /* This is the final partition, need to account for possible last literals
+       */
+      srcBytes += blockSize - srcBytesTotal;
+      lastBlockEntireSrc = lastBlock;
+    } else {
+      ZSTD_deriveSeqStoreChunk(nextSeqStore, &zc->seqStore, partitions[i],
+                               partitions[i + 1]);
+    }
+
+    cSizeChunk = ZSTD_compressSeqStore_singleBlock(
+        zc, currSeqStore, &dRep, &cRep, op, dstCapacity, ip, srcBytes,
+        lastBlockEntireSrc, 1 /* isPartition */);
+    DEBUGLOG(
+        5, "Estimated size: %zu vs %zu : actual size",
+        ZSTD_buildEntropyStatisticsAndEstimateSubBlockSize(currSeqStore, zc),
+        cSizeChunk);
+    FORWARD_IF_ERROR(cSizeChunk, "Compressing chunk failed!");
+
+    ip += srcBytes;
+    op += cSizeChunk;
+    dstCapacity -= cSizeChunk;
+    cSize += cSizeChunk;
+    *currSeqStore = *nextSeqStore;
+    assert(cSizeChunk <= zc->blockSizeMax + ZSTD_blockHeaderSize);
+  }
+  /* cRep and dRep may have diverged during the compression.
+   * If so, we use the dRep repcodes for the next block.
+   */
+  ZSTD_memcpy(zc->blockState.prevCBlock->rep, dRep.rep, sizeof(Repcodes_t));
+  return cSize;
+}
+
 static size_t ZSTD_compressBlock_splitBlock(ZSTD_CCtx *zc, void *dst,
                                             size_t dstCapacity, const void *src,
                                             size_t srcSize, U32 lastBlock) {
@@ -4613,6 +4768,38 @@ static size_t ZSTD_compressBlock_splitBlock(ZSTD_CCtx *zc, void *dst,
 
   cSize = ZSTD_compressBlock_splitBlock_internal(zc, dst, dstCapacity, src,
                                                  srcSize, lastBlock, nbSeq);
+  FORWARD_IF_ERROR(cSize, "Splitting blocks failed!");
+  return cSize;
+}
+
+static size_t PR_compressBlock_splitBlock(ZSTD_CCtx *zc, void *dst,
+                                            size_t dstCapacity, const void *src,
+                                            size_t srcSize, U32 lastBlock,PR_Param *prParams) {
+  U32 nbSeq;
+  size_t cSize;
+  DEBUGLOG(5, "ZSTD_compressBlock_splitBlock");
+  assert(zc->appliedParams.postBlockSplitter == ZSTD_ps_enable);
+
+  {
+    const size_t bss = ZSTD_buildSeqStore(zc, src, srcSize);
+    FORWARD_IF_ERROR(bss, "ZSTD_buildSeqStore failed");
+    if (bss == ZSTDbss_noCompress) {
+      if (zc->blockState.prevCBlock->entropy.fse.offcode_repeatMode ==
+          FSE_repeat_valid)
+        zc->blockState.prevCBlock->entropy.fse.offcode_repeatMode =
+            FSE_repeat_check;
+      RETURN_ERROR_IF(zc->seqCollector.collectSequences,
+                      sequenceProducer_failed, "Uncompressible block");
+      cSize = ZSTD_noCompressBlock(dst, dstCapacity, src, srcSize, lastBlock);
+      FORWARD_IF_ERROR(cSize, "ZSTD_noCompressBlock failed");
+      DEBUGLOG(5, "ZSTD_compressBlock_splitBlock: Nocompress block");
+      return cSize;
+    }
+    nbSeq = (U32)(zc->seqStore.sequences - zc->seqStore.sequencesStart);
+  }
+
+  cSize = PR_compressBlock_splitBlock_internal(zc, dst, dstCapacity, src,
+                                                 srcSize, lastBlock, nbSeq, prParams);
   FORWARD_IF_ERROR(cSize, "Splitting blocks failed!");
   return cSize;
 }
@@ -5002,36 +5189,41 @@ static size_t PR_compress_frameChunk(ZSTD_CCtx *cctx, void *dst,
 
     {
       size_t cSize;
-      if (ZSTD_useTargetCBlockSize(&cctx->appliedParams)) {
-        cSize = ZSTD_compressBlock_targetCBlockSize(cctx, op, dstCapacity, ip,
-                                                    blockSize, lastBlock);
-        FORWARD_IF_ERROR(cSize, "ZSTD_compressBlock_targetCBlockSize failed");
-        assert(cSize > 0);
-        assert(cSize <= blockSize + ZSTD_blockHeaderSize);
-      } else if (ZSTD_blockSplitterEnabled(&cctx->appliedParams)) {
-        cSize = ZSTD_compressBlock_splitBlock(cctx, op, dstCapacity, ip,
-                                              blockSize, lastBlock);
+      // if (ZSTD_useTargetCBlockSize(&cctx->appliedParams)) {
+      //   cSize = ZSTD_compressBlock_targetCBlockSize(cctx, op, dstCapacity, ip,
+      //                                               blockSize, lastBlock);
+      //   FORWARD_IF_ERROR(cSize, "ZSTD_compressBlock_targetCBlockSize failed");
+      //   assert(cSize > 0);
+      //   assert(cSize <= blockSize + ZSTD_blockHeaderSize);
+      // } else if (ZSTD_blockSplitterEnabled(&cctx->appliedParams)) {
+      //   // cSize = ZSTD_compressBlock_splitBlock(cctx, op, dstCapacity, ip,
+      //   //                                       blockSize, lastBlock);
+      //   // FORWARD_IF_ERROR(cSize, "ZSTD_compressBlock_splitBlock failed");
+      //   // assert(cSize > 0 || cctx->seqCollector.collectSequences == 1);
+      // } else {
+      //   cSize = ZSTD_compressBlock_internal(cctx, op + ZSTD_blockHeaderSize,
+      //                                       dstCapacity - ZSTD_blockHeaderSize,
+      //                                       ip, blockSize, 1 /* frame */);
+      //   FORWARD_IF_ERROR(cSize, "ZSTD_compressBlock_internal failed");
+
+      //   if (cSize == 0) { /* block is not compressible */
+      //     cSize =
+      //         ZSTD_noCompressBlock(op, dstCapacity, ip, blockSize, lastBlock);
+      //     FORWARD_IF_ERROR(cSize, "ZSTD_noCompressBlock failed");
+      //   } else {
+      //     U32 const cBlockHeader =
+      //         cSize == 1
+      //             ? lastBlock + (((U32)bt_rle) << 1) + (U32)(blockSize << 3)
+      //             : lastBlock + (((U32)bt_compressed) << 1) + (U32)(cSize << 3);
+      //     MEM_writeLE24(op, cBlockHeader);
+      //     cSize += ZSTD_blockHeaderSize;
+      //   }
+      // } /* if (ZSTD_useTargetCBlockSize(&cctx->appliedParams))*/
+      cctx->appliedParams.postBlockSplitter = ZSTD_ps_enable;
+      cSize = PR_compressBlock_splitBlock(cctx, op, dstCapacity, ip,
+                                              blockSize, lastBlock, prParams);
         FORWARD_IF_ERROR(cSize, "ZSTD_compressBlock_splitBlock failed");
         assert(cSize > 0 || cctx->seqCollector.collectSequences == 1);
-      } else {
-        cSize = ZSTD_compressBlock_internal(cctx, op + ZSTD_blockHeaderSize,
-                                            dstCapacity - ZSTD_blockHeaderSize,
-                                            ip, blockSize, 1 /* frame */);
-        FORWARD_IF_ERROR(cSize, "ZSTD_compressBlock_internal failed");
-
-        if (cSize == 0) { /* block is not compressible */
-          cSize =
-              ZSTD_noCompressBlock(op, dstCapacity, ip, blockSize, lastBlock);
-          FORWARD_IF_ERROR(cSize, "ZSTD_noCompressBlock failed");
-        } else {
-          U32 const cBlockHeader =
-              cSize == 1
-                  ? lastBlock + (((U32)bt_rle) << 1) + (U32)(blockSize << 3)
-                  : lastBlock + (((U32)bt_compressed) << 1) + (U32)(cSize << 3);
-          MEM_writeLE24(op, cBlockHeader);
-          cSize += ZSTD_blockHeaderSize;
-        }
-      } /* if (ZSTD_useTargetCBlockSize(&cctx->appliedParams))*/
 
       /* @savings is employed to ensure that splitting doesn't worsen expansion
        * of incompressible data. Without splitting, the maximum expansion is 3

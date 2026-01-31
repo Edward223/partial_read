@@ -19,7 +19,6 @@
  *  Dependencies
  ***************************************/
 #include "../common/zstd_internal.h"
-#include "zstd.h"
 #include "zstd_cwksp.h"
 #ifdef ZSTD_MULTITHREAD
 #include "zstdmt_compress.h"
@@ -596,6 +595,7 @@ struct PR_Params_s {
   size_t compress_block_size;
   size_t inner_block_size;
   void *index_buffer;
+  bool use_global_entropy;
 };
 
 typedef enum { ZSTD_dtlm_fast, ZSTD_dtlm_full } ZSTD_dictTableLoadMethod_e;
